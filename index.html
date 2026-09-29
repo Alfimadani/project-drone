@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Batch Image Crop 16:9 & Full Preset Manager</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- JSZip untuk kompresi ZIP -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <!-- FileSaver.js untuk download ZIP / JSON -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="bg-gray-900 text-gray-100 font-sans min-h-screen flex flex-col">
+
+  <!-- Header -->
+  <header class="bg-gray-800 border-b border-gray-700 px-6 py-4 flex flex-wrap items-center justify-between gap-4">
+    <div class="flex items-center space-x-3">
+      <div class="bg-blue-600 p-2 rounded-lg">
+        <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+        </svg>
+      </div>
+      <div>
+        <h1 class="text-xl font-bold text-white tracking-wide">16:9 Batch Crop & Watermark Tool</h1>
+        <p class="text-xs text-gray-400">Resolusi Asli Terjaga & Preset Manager Lengkap</p>
+      </div>
+    </div>
+
+    <!-- Actions Preset Manager & Global Export -->
+    <div class="flex flex-wrap items-center gap-2">
+      <!-- Dropdown Select Preset -->
+      <div class="flex items-center bg-gray-900 border border-gray-700 rounded px-2 py-1">
+        <span class="text-xs text-gray-400 mr-2 font-medium">Preset:</span>
+        <select id="presetSelect" class="bg-transparent text-xs text-white focus:outline-none max-w-[150px]">
+          <!-- Dynamic options -->
+        </select>
+      </div>
+
+      <!-- Preset Actions -->
+      <button id="btnLoadPreset" title="Muat Preset Terpilih" class="px-2.5 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs font-semibold rounded shadow transition flex items-center gap-1">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+        Muat
+      </button>
+
+      <button id="btnAddPreset" title="Tambah Preset Baru" class="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded shadow transition flex items-center gap-1">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+        Tambah
+      </button>
+
+      <button id="btnEditPreset" title="Perbarui / Timpa Preset Terpilih" class="px-2.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold rounded shadow transition flex items-center gap-1">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+        Update
+      </button>
+
+      <button id="btnDownloadPreset" title="Download Preset ke File (.JSON)" class="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded shadow transition flex items-center gap-1">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+        Download (.JSON)
+      </button>
+
+      <!-- Upload Preset JSON Button -->
+      <label class="px-2.5 py-1.5 bg-teal-600 hover:bg-teal-500 text-white text-xs font-semibold rounded shadow transition flex items-center gap-1 cursor-pointer" title="Upload Preset dari File (.JSON)">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+        Upload (.JSON)
+        <input type="file" id="presetFileInput" accept=".json" class="hidden">
+      </label>
+
+      <button id="btnDeletePreset" class="px-2 py-1.5 bg-red-900/60 hover:bg-red-800 text-red-200 text-xs font-semibold rounded transition" title="Hapus Preset Terpilih">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+      </button>
+
+      <div class="h-6 w-px bg-gray-700 mx-1"></div>
+
+      <button id="btnDownloadZip" disabled class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded shadow transition flex items-center gap-2">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+        Download All (.ZIP)
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Layout -->
+  <div class="flex flex-1 overflow-hidden">
+    
+    <!-- Left Sidebar: Controls & Settings -->
+    <aside class="w-80 bg-gray-800 border-r border-gray-700 p-4 overflow-y-auto space-y-5 text-xs">
+      
+      <!-- Upload Zone -->
+      <div class="bg-gray-900 border-2 border-dashed border-gray-600 rounded-xl p-4 text-center hover:border-blue-500 transition cursor-pointer relative" id="dropZone">
+        <input type="file" id="fileInput" multiple accept="image/*" class="absolute inset-0 opacity-0 cursor-pointer w-full h-full">
+        <svg class="w-8 h-8 text-gray-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+        </svg>
+        <p class="font-medium text-gray-200">Klik / Seret Foto di Sini</p>
+        <p class="text-[10px] text-gray-400 mt-1">Bisa Upload Banyak Foto Sekaligus</p>
+      </div>
+
+      <!-- General View Settings -->
+      <div class="bg-gray-800/80 border border-gray-700 rounded-lg p-3 space-y-3">
+        <span class="font-bold text-gray-300 block uppercase tracking-wider text-[10px]">Tampilan Preview & ZIP</span>
+        <label class="flex items-center space-x-2 cursor-pointer">
+          <input type="checkbox" id="chkShowOriginal" class="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-0">
+          <span class="text-gray-200">Sandingkan Foto Original di Tampilan</span>
+        </label>
+        <label class="flex items-center space-x-2 cursor-pointer">
+          <input type="checkbox" id="chkIncludeOriginalsZip" checked class="rounded bg-gray-700 border-gray-600 text-emerald-600 focus:ring-0">
+          <span class="text-gray-200">Sertakan Folder <code class="text-xs text-amber-400">Originals/</code> di dalam ZIP</span>
+        </label>
+      </div>
+
+      <!-- Text Controls Panel -->
+      <div class="bg-gray-800/80 border border-gray-700 rounded-lg p-3 space-y-3">
+        <span class="font-bold text-gray-300 block uppercase tracking-wider text-[10px]">Text Template</span>
+        
+        <div>
+          <label class="block text-gray-400 mb-1">Format Teks Watermark</label>
+          <input type="text" id="txtTemplate" value="[DATE] - [TIME] WIT" class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white text-xs focus:border-blue-500 focus:outline-none">
+          <p class="text-[10px] text-gray-400 mt-1">Variabel: <code class="text-blue-400">[DATE]</code>, <code class="text-blue-400">[TIME]</code>, <code class="text-blue-400">[FILENAME]</code></p>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-gray-400 mb-1">Font Family</label>
+            <select id="fontFamily" class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white">
+              <option value="Arial">Arial</option>
+              <option value="Impact">Impact</option>
+              <option value="Trebuchet MS">Trebuchet MS</option>
+              <option value="Verdana">Verdana</option>
+              <option value="Courier New">Courier New</option>
+              <option value="Times New Roman">Times New Roman</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-gray-400 mb-1">Ukuran Font Base</label>
+            <input type="number" id="fontSize" value="38" min="10" max="200" class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white">
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2 items-center">
+          <div>
+            <label class="block text-gray-400 mb-1">Warna Teks</label>
+            <input type="color" id="textColor" value="#ffffff" class="w-full h-7 bg-gray-900 border border-gray-700 rounded p-0.5 cursor-pointer">
+          </div>
+          <div>
+            <label class="block text-gray-400 mb-1">Styling</label>
+            <div class="flex gap-2">
+              <label class="flex items-center space-x-1 cursor-pointer">
+                <input type="checkbox" id="chkBold" checked class="rounded bg-gray-700 border-gray-600">
+                <span class="font-bold">B</span>
+              </label>
+              <label class="flex items-center space-x-1 cursor-pointer">
+                <input type="checkbox" id="chkItalic" class="rounded bg-gray-700 border-gray-600">
+                <span class="italic">I</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="flex justify-between text-gray-400 mb-1">
+            <span>Opacity Teks</span>
+            <span id="lblTextOpacity">100%</span>
+          </div>
+          <input type="range" id="textOpacity" min="0" max="100" value="100" class="w-full accent-blue-500">
+        </div>
+      </div>
+
+      <!-- Outline Panel -->
+      <div class="bg-gray-800/80 border border-gray-700 rounded-lg p-3 space-y-3">
+        <div class="flex items-center justify-between">
+          <span class="font-bold text-gray-300 uppercase tracking-wider text-[10px]">Outline (Garis Tepi)</span>
+          <label class="flex items-center space-x-1 cursor-pointer">
+            <input type="checkbox" id="chkApplyOutline" checked class="rounded bg-gray-700 border-gray-600 text-blue-600">
+            <span>Apply</span>
+          </label>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2 items-center">
+          <div>
+            <label class="block text-gray-400 mb-1">Warna Outline</label>
+            <input type="color" id="outlineColor" value="#000000" class="w-full h-7 bg-gray-900 border border-gray-700 rounded p-0.5 cursor-pointer">
+          </div>
+          <div>
+            <label class="block text-gray-400 mb-1">Thickness Base</label>
+            <input type="number" id="outlineThickness" min="1" max="36" value="6" class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white">
+          </div>
+        </div>
+
+        <div class="space-y-1">
+          <label class="flex items-center space-x-2 text-gray-300 cursor-pointer">
+            <input type="radio" name="outlineMode" value="both" checked class="text-blue-600 bg-gray-900 border-gray-700">
+            <span>Outline + Text</span>
+          </label>
+          <label class="flex items-center space-x-2 text-gray-300 cursor-pointer">
+            <input type="radio" name="outlineMode" value="outlineOnly" class="text-blue-600 bg-gray-900 border-gray-700">
+            <span>Outline Only</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Shadow Panel -->
+      <div class="bg-gray-800/80 border border-gray-700 rounded-lg p-3 space-y-3">
+        <div class="flex items-center justify-between">
+          <span class="font-bold text-gray-300 uppercase tracking-wider text-[10px]">Shadow (Bayangan)</span>
+          <label class="flex items-center space-x-1 cursor-pointer">
+            <input type="checkbox" id="chkApplyShadow" checked class="rounded bg-gray-700 border-gray-600 text-blue-600">
+            <span>Apply</span>
+          </label>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2 items-center">
+          <div>
+            <label class="block text-gray-400 mb-1">Warna Shadow</label>
+            <input type="color" id="shadowColor" value="#000000" class="w-full h-7 bg-gray-900 border border-gray-700 rounded p-0.5 cursor-pointer">
+          </div>
+          <div>
+            <label class="block text-gray-400 mb-1">Blur Base</label>
+            <input type="number" id="shadowBlur" min="0" max="10" value="2" class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white">
+          </div>
+        </div>
+
+        <div>
+          <div class="flex justify-between text-gray-400 mb-1">
+            <span>Opacity Shadow</span>
+            <span id="lblShadowOpacity">35%</span>
+          </div>
+          <input type="range" id="shadowOpacity" min="0" max="100" value="35" class="w-full accent-blue-500">
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-gray-400 mb-1">Offset X Base</label>
+            <input type="number" id="shadowX" value="2" class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white">
+          </div>
+          <div>
+            <label class="block text-gray-400 mb-1">Offset Y Base</label>
+            <input type="number" id="shadowY" value="2" class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white">
+          </div>
+        </div>
+      </div>
+
+      <!-- Anchor / Alignment Panel -->
+      <div class="bg-gray-800/80 border border-gray-700 rounded-lg p-3 space-y-3">
+        <span class="font-bold text-gray-300 block uppercase tracking-wider text-[10px]">Anchor (Posisi Watermark)</span>
+        
+        <div>
+          <label class="block text-gray-400 mb-1">Posisi Sudut Patokan</label>
+          <select id="anchorPosition" class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white">
+            <option value="bottom-right" selected>Bottom Right</option>
+            <option value="bottom-left">Bottom Left</option>
+            <option value="bottom-center">Bottom Center</option>
+            <option value="top-right">Top Right</option>
+            <option value="top-left">Top Left</option>
+            <option value="center">Center</option>
+          </select>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-gray-400 mb-1">Offset X Base</label>
+            <input type="number" id="offsetX" value="-30" class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white">
+          </div>
+          <div>
+            <label class="block text-gray-400 mb-1">Offset Y Base</label>
+            <input type="number" id="offsetY" value="-25" class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-white">
+          </div>
+        </div>
+      </div>
+
+    </aside>
+
+    <!-- Right Workspace -->
+    <main class="flex-1 bg-gray-950 p-6 overflow-y-auto">
+      
+      <!-- Empty State -->
+      <div id="emptyState" class="h-full flex flex-col items-center justify-center text-center text-gray-500 py-20">
+        <div class="w-20 h-20 bg-gray-800/50 rounded-full flex items-center justify-center mb-4">
+          <svg class="w-10 h-10 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2 2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+          </svg>
+        </div>
+        <h2 class="text-lg font-semibold text-gray-300">Belum Ada Foto Diupload</h2>
+        <p class="text-sm text-gray-400 max-w-sm mt-1">Unggah foto dari panel kiri. Anda dapat mengunduh / mengunggah file preset (<code class="text-blue-400">.json</code>) dari tombol di bagian atas header.</p>
+      </div>
+
+      <!-- Grid Preview -->
+      <div id="imageListContainer" class="space-y-6 hidden">
+        <!-- Rendered dynamically -->
+      </div>
+
+    </main>
+
+  </div>
+
+  <!-- Custom JS -->
+  <script src="js/script.js"></script>
+</body>
+</html>
