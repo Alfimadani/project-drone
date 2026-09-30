@@ -84,26 +84,28 @@ dropZone.addEventListener('drop', async (e) => {
   dropZone.classList.remove('border-blue-500');
   
   const items = e.dataTransfer.items;
-  if (!items) return;
-
   const files = [];
-  const queue = [];
 
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    if (item.kind === 'file') {
-      const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
-      if (entry) {
-        queue.push(traverseFileTree(entry));
-      } else {
-        const file = item.getAsFile();
-        if (file) files.push(file);
+  if (items && items.length > 0) {
+    const promises = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind === 'file') {
+        const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+        if (entry) {
+          promises.push(traverseFileTree(entry));
+        } else {
+          const file = item.getAsFile();
+          if (file) files.push(file);
+        }
       }
     }
+    
+    const nestedFiles = await Promise.all(promises);
+    nestedFiles.forEach(arr => files.push(...arr));
+  } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+    files.push(...Array.from(e.dataTransfer.files));
   }
-
-  const fileArrays = await Promise.all(queue);
-  fileArrays.forEach(arr => files.push(...arr));
 
   if (files.length > 0) {
     handleFiles(files);
@@ -115,15 +117,30 @@ function traverseFileTree(item) {
   return new Promise((resolve) => {
     if (item.isFile) {
       item.file((file) => {
-        resolve(file.type.startsWith('image/') ? [file] : []);
-      });
+        if (file && file.type && file.type.startsWith('image/')) {
+          resolve([file]);
+        } else {
+          resolve([]);
+        }
+      }, () => resolve([]));
     } else if (item.isDirectory) {
       const dirReader = item.createReader();
-      dirReader.readEntries(async (entries) => {
-        const entriesPromises = entries.map(entry => traverseFileTree(entry));
-        const results = await Promise.all(entriesPromises);
-        resolve(results.flat());
-      });
+      let entries = [];
+
+      const readAllEntries = () => {
+        dirReader.readEntries(async (results) => {
+          if (results.length === 0) {
+            const promises = entries.map(entry => traverseFileTree(entry));
+            const childFiles = await Promise.all(promises);
+            resolve(childFiles.flat());
+          } else {
+            entries = entries.concat(Array.from(results));
+            readAllEntries();
+          }
+        }, () => resolve([]));
+      };
+
+      readAllEntries();
     } else {
       resolve([]);
     }
