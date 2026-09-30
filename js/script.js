@@ -56,8 +56,10 @@ const allInputs = [
 ];
 
 allInputs.forEach(input => {
-  input.addEventListener('input', () => { updateLabels(); renderAllCanvases(); });
-  input.addEventListener('change', () => { updateLabels(); renderAllCanvases(); });
+  if (input) {
+    input.addEventListener('input', () => { updateLabels(); renderAllCanvases(); });
+    input.addEventListener('change', () => { updateLabels(); renderAllCanvases(); });
+  }
 });
 
 document.querySelectorAll('input[name="outlineMode"]').forEach(radio => {
@@ -65,27 +67,103 @@ document.querySelectorAll('input[name="outlineMode"]').forEach(radio => {
 });
 
 function updateLabels() {
-  lblTextOpacity.textContent = textOpacity.value + '%';
-  lblShadowOpacity.textContent = shadowOpacity.value + '%';
+  if (lblTextOpacity && textOpacity) lblTextOpacity.textContent = textOpacity.value + '%';
+  if (lblShadowOpacity && shadowOpacity) lblShadowOpacity.textContent = shadowOpacity.value + '%';
 }
 
-// Drag and Drop
-dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('border-blue-500'); });
+// --- DRAG AND DROP & FOLDER DETECTION ---
+dropZone.addEventListener('dragover', (e) => { 
+  e.preventDefault(); 
+  dropZone.classList.add('border-blue-500'); 
+});
+
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('border-blue-500'));
-dropZone.addEventListener('drop', (e) => {
+
+dropZone.addEventListener('drop', async (e) => {
   e.preventDefault();
   dropZone.classList.remove('border-blue-500');
-  if (e.dataTransfer.files?.length > 0) handleFiles(e.dataTransfer.files);
+  
+  const items = e.dataTransfer.items;
+  if (!items) return;
+
+  const files = [];
+  const queue = [];
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (item.kind === 'file') {
+      const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+      if (entry) {
+        queue.push(traverseFileTree(entry));
+      } else {
+        const file = item.getAsFile();
+        if (file) files.push(file);
+      }
+    }
+  }
+
+  const fileArrays = await Promise.all(queue);
+  fileArrays.forEach(arr => files.push(...arr));
+
+  if (files.length > 0) {
+    handleFiles(files);
+  }
 });
+
+// Rekursif membaca seluruh isi Folder
+function traverseFileTree(item) {
+  return new Promise((resolve) => {
+    if (item.isFile) {
+      item.file((file) => {
+        resolve(file.type.startsWith('image/') ? [file] : []);
+      });
+    } else if (item.isDirectory) {
+      const dirReader = item.createReader();
+      dirReader.readEntries(async (entries) => {
+        const entriesPromises = entries.map(entry => traverseFileTree(entry));
+        const results = await Promise.all(entriesPromises);
+        resolve(results.flat());
+      });
+    } else {
+      resolve([]);
+    }
+  });
+}
 
 fileInput.addEventListener('change', (e) => {
-  if (e.target.files?.length > 0) handleFiles(e.target.files);
+  if (e.target.files?.length > 0) handleFiles(Array.from(e.target.files));
 });
 
-function handleFiles(files) {
-  Array.from(files).forEach(file => {
-    if (!file.type.startsWith('image/')) return;
+// --- HELPER METADATA WAKTU & PENGURUTAN (RENDAH KE TINGGI) ---
+function getFileTimestamp(file) {
+  const name = file.name || "";
+  // Cek jika ada format DJI YYYYMMDDHHMMSS
+  const matchDji = name.match(/DJI_(\d{14})/);
+  if (matchDji) {
+    return parseInt(matchDji[1], 10);
+  }
+  // Alternatif: Ambil timestamp dari properti lastModified file
+  return file.lastModified || 0;
+}
 
+function sortByTimestamp(a, b) {
+  const timeA = getFileTimestamp(a.file);
+  const timeB = getFileTimestamp(b.file);
+  if (timeA !== timeB) {
+    return timeA - timeB;
+  }
+  return a.file.name.localeCompare(b.file.name);
+}
+
+// --- PENANGANAN FILE & PROSES BATCH ---
+function handleFiles(files) {
+  const validFiles = files.filter(f => f.type && f.type.startsWith('image/'));
+  if (validFiles.length === 0) return;
+
+  let loadedCount = 0;
+  const newItems = [];
+
+  validFiles.forEach(file => {
     const modDate = new Date(file.lastModified);
     const dateStr = formatDate(modDate);
     const timeStr = formatTime(modDate);
@@ -103,15 +181,41 @@ function handleFiles(files) {
           focalX: 0.5,
           focalY: 0.5
         };
-        imageFiles.push(item);
-        createCardElement(item);
-        updateUIState();
-        renderCanvas(item);
+        newItems.push(item);
+        loadedCount++;
+
+        if (loadedCount === validFiles.length) {
+          imageFiles.push(...newItems);
+          // Urutkan seluruh gambar dari waktu terendah ke tinggi
+          reorderAndRenderAll();
+        }
       };
       img.src = evt.target.result;
     };
     reader.readAsDataURL(file);
   });
+}
+
+// Merapikan Urutan UI & Memuat Ulang Kartu Canvas Sesuai Urutan Waktu
+function reorderAndRenderAll() {
+  imageFiles.sort(sortByTimestamp);
+  
+  // Terapkan posisi focal jika ada preset aktif
+  const activePresetName = presetSelect.value;
+  if (activePresetName) {
+    const presets = getSavedPresets();
+    if (presets[activePresetName]?.focalPositions) {
+      applyFocalPositions(presets[activePresetName].focalPositions);
+    }
+  }
+
+  imageListContainer.innerHTML = '';
+  imageFiles.forEach(item => {
+    createCardElement(item);
+    renderCanvas(item);
+  });
+
+  updateUIState();
 }
 
 function formatDate(date) {
@@ -145,7 +249,9 @@ function createCardElement(item) {
       <div class="flex justify-between items-center mb-2">
         <div>
           <span class="text-xs font-bold text-gray-200">${item.file.name}</span>
-          <span class="text-[10px] text-gray-400 block">Resolusi Asli: ${item.imgObj.naturalWidth} x ${item.imgObj.naturalHeight} px</span>
+          <span class="text-[10px] text-gray-400 block">
+            Resolusi Asli: ${item.imgObj.naturalWidth} x ${item.imgObj.naturalHeight} px | Waktu: ${item.dateStr} ${item.timeStr}
+          </span>
         </div>
         <button onclick="removeImage('${item.id}')" class="text-xs text-red-400 hover:text-red-300 font-semibold flex items-center gap-1">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
@@ -202,7 +308,7 @@ function renderAllCanvases() {
   });
 }
 
-// --- CANVAS RENDERING (RESOLUSI ASLI TANPA MENURUNKAN QUALITY) ---
+// --- CANVAS RENDERING (RESOLUSI ASLI) ---
 function renderCanvas(item) {
   const canvas = document.getElementById(`canvas_${item.id}`);
   if (!canvas) return;
@@ -229,7 +335,6 @@ function renderCanvas(item) {
   cropX = Math.max(0, Math.min(srcW - cropW, cropX));
   cropY = Math.max(0, Math.min(srcH - cropH, cropY));
 
-  // Menyesuaikan ukuran canvas tepat dengan ukuran Crop Asli Foto
   canvas.width = Math.round(cropW);
   canvas.height = Math.round(cropH);
 
@@ -253,9 +358,7 @@ function drawWatermark(ctx, canvasW, canvasH, item) {
 
   ctx.save();
 
-  // Skala Proporsional Teks Berdasarkan Tinggi Gambar (Acuan standar base height = 900px)
   const scaleFactor = canvasH / 900;
-
   const baseFontSize = parseInt(fontSize.value) || 38;
   const scaledFontSize = Math.round(baseFontSize * scaleFactor);
 
@@ -319,7 +422,8 @@ function drawWatermark(ctx, canvasW, canvasH, item) {
   }
 
   // Outline
-  const outlineMode = document.querySelector('input[name="outlineMode"]:checked').value;
+  const outlineRadio = document.querySelector('input[name="outlineMode"]:checked');
+  const outlineMode = outlineRadio ? outlineRadio.value : 'both';
   if (chkApplyOutline.checked) {
     ctx.strokeStyle = outlineColor.value;
     ctx.lineWidth = (parseInt(outlineThickness.value) || 6) * scaleFactor;
@@ -378,13 +482,14 @@ function refreshPresetDropdown(selectedName = null) {
   });
 }
 
-// Mendapatkan Objek Pengaturan Aktif
 function getCurrentPresetData(name) {
   const focalPositions = imageFiles.map(img => ({
     fileName: img.file.name,
     focalX: img.focalX,
     focalY: img.focalY
   }));
+
+  const outlineRadio = document.querySelector('input[name="outlineMode"]:checked');
 
   return {
     name: name,
@@ -399,7 +504,7 @@ function getCurrentPresetData(name) {
     chkApplyOutline: chkApplyOutline.checked,
     outlineColor: outlineColor.value,
     outlineThickness: outlineThickness.value,
-    outlineMode: document.querySelector('input[name="outlineMode"]:checked').value,
+    outlineMode: outlineRadio ? outlineRadio.value : 'both',
     chkApplyShadow: chkApplyShadow.checked,
     shadowColor: shadowColor.value,
     shadowBlur: shadowBlur.value,
@@ -428,7 +533,7 @@ btnAddPreset.addEventListener('click', () => {
   alert(`Preset "${cleanName}" berhasil ditambahkan!`);
 });
 
-// 2. EDIT / UPDATE PRESET YANG SEDANG DIPILIH
+// 2. EDIT / UPDATE PRESET
 btnEditPreset.addEventListener('click', () => {
   const selectedName = presetSelect.value;
   if (!selectedName) {
@@ -459,6 +564,17 @@ btnLoadPreset.addEventListener('click', () => {
   alert(`Preset "${selectedName}" berhasil dimuat!`);
 });
 
+function applyFocalPositions(focalPositions) {
+  if (!focalPositions || !Array.isArray(focalPositions)) return;
+  focalPositions.forEach(savedPos => {
+    const match = imageFiles.find(i => i.file.name === savedPos.fileName);
+    if (match) {
+      match.focalX = savedPos.focalX;
+      match.focalY = savedPos.focalY;
+    }
+  });
+}
+
 function applyPresetData(p) {
   txtTemplate.value = p.txtTemplate ?? txtTemplate.value;
   fontFamily.value = p.fontFamily ?? fontFamily.value;
@@ -488,21 +604,13 @@ function applyPresetData(p) {
   offsetX.value = p.offsetX ?? offsetX.value;
   offsetY.value = p.offsetY ?? offsetY.value;
 
-  if (p.focalPositions && Array.isArray(p.focalPositions)) {
-    p.focalPositions.forEach(savedPos => {
-      const match = imageFiles.find(i => i.file.name === savedPos.fileName);
-      if (match) {
-        match.focalX = savedPos.focalX;
-        match.focalY = savedPos.focalY;
-      }
-    });
-  }
+  applyFocalPositions(p.focalPositions);
 
   updateLabels();
   renderAllCanvases();
 }
 
-// 4. DOWNLOAD PRESET (EKSPOR JSON)
+// 4. DOWNLOAD PRESET (.JSON)
 btnDownloadPreset.addEventListener('click', () => {
   const selectedName = presetSelect.value;
   const presets = getSavedPresets();
@@ -519,7 +627,7 @@ btnDownloadPreset.addEventListener('click', () => {
   saveAs(blob, `Preset_${selectedName.replace(/\s+/g, '_')}.json`);
 });
 
-// 5. UPLOAD PRESET (IMPOR JSON)
+// 5. UPLOAD PRESET (.JSON)
 presetFileInput.addEventListener('change', (e) => {
   const file = e.target.files?.[0];
   if (!file) return;
@@ -537,7 +645,6 @@ presetFileInput.addEventListener('change', (e) => {
       const presets = getSavedPresets();
       let presetName = importedPreset.name;
 
-      // Mencegah timpa jika nama sama
       if (presets[presetName]) {
         const rename = prompt(`Preset dengan nama "${presetName}" sudah ada. Masukkan nama baru jika tidak ingin menimpa:`, `${presetName}_Impor`);
         if (rename && rename.trim()) presetName = rename.trim();
@@ -556,7 +663,7 @@ presetFileInput.addEventListener('change', (e) => {
     }
   };
   reader.readAsText(file);
-  presetFileInput.value = ''; // Reset file input
+  presetFileInput.value = '';
 });
 
 // 6. HAPUS PRESET
@@ -591,20 +698,20 @@ btnDownloadZip.addEventListener('click', async () => {
     const item = imageFiles[i];
     const canvas = document.getElementById(`canvas_${item.id}`);
 
-    // 1. Foto Hasil Crop 16:9 + Watermark (Kualitas Tinggi 95%) di DILUAR (Root ZIP)
     const blob16x9 = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.95));
     const cleanName = item.file.name.substring(0, item.file.name.lastIndexOf('.')) || item.file.name;
-    zip.file(`${cleanName}_16x9.jpg`, blob16x9);
+    
+    // Penamaan file urut sesuai indeks kronologis
+    const indexPrefix = String(i + 1).padStart(2, '0');
+    zip.file(`${indexPrefix}_${cleanName}_16x9.jpg`, blob16x9);
 
-    // 2. Foto Original Asli dimasukkan KE DALAM FOLDER Originals/
     if (includeOriginals && originalsFolder) {
-      originalsFolder.file(item.file.name, item.file);
+      originalsFolder.file(`${indexPrefix}_${item.file.name}`, item.file);
     }
   }
 
-  // Generate & Download ZIP
   zip.generateAsync({ type: "blob" }).then(content => {
-    saveAs(content, "Tugas_Harian_16x9_Hasil.zip");
+    saveAs(content, "Hasil_Crop_16x9_Urut.zip");
     btnDownloadZip.disabled = false;
     btnDownloadZip.innerHTML = `
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
