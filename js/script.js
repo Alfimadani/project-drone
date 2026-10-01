@@ -2,6 +2,11 @@
 let imageFiles = []; 
 const PRESET_STORAGE_KEY = 'crop_watermark_named_presets_v1';
 
+// Ambil element status baru
+const uploadStatus = document.getElementById('uploadStatus');
+const uploadStatusText = document.getElementById('uploadStatusText');
+const uploadProgressBar = document.getElementById('uploadProgressBar');
+
 // DOM Elements
 const fileInput = document.getElementById('fileInput');
 const dropZone = document.getElementById('dropZone');
@@ -47,7 +52,15 @@ const offsetY = document.getElementById('offsetY');
 const chkShowOriginal = document.getElementById('chkShowOriginal');
 const chkIncludeOriginalsZip = document.getElementById('chkIncludeOriginalsZip');
 
-// Live Preview Events
+// Throttle/Debounce untuk cegah lag saat input slider/text diubah
+let renderTimeout = null;
+function requestRenderAll() {
+  if (renderTimeout) cancelAnimationFrame(renderTimeout);
+  renderTimeout = requestAnimationFrame(() => {
+    renderAllCanvases();
+  });
+}
+
 const allInputs = [
   txtTemplate, fontFamily, fontSize, textColor, chkBold, chkItalic, textOpacity,
   chkApplyOutline, outlineColor, outlineThickness,
@@ -57,13 +70,13 @@ const allInputs = [
 
 allInputs.forEach(input => {
   if (input) {
-    input.addEventListener('input', () => { updateLabels(); renderAllCanvases(); });
-    input.addEventListener('change', () => { updateLabels(); renderAllCanvases(); });
+    input.addEventListener('input', () => { updateLabels(); requestRenderAll(); });
+    input.addEventListener('change', () => { updateLabels(); requestRenderAll(); });
   }
 });
 
 document.querySelectorAll('input[name="outlineMode"]').forEach(radio => {
-  radio.addEventListener('change', renderAllCanvases);
+  radio.addEventListener('change', requestRenderAll);
 });
 
 function updateLabels() {
@@ -100,33 +113,25 @@ dropZone.addEventListener('drop', async (e) => {
         }
       }
     }
-    
     const nestedFiles = await Promise.all(promises);
     nestedFiles.forEach(arr => files.push(...arr));
   } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
     files.push(...Array.from(e.dataTransfer.files));
   }
 
-  if (files.length > 0) {
-    handleFiles(files);
-  }
+  if (files.length > 0) handleFiles(files);
 });
 
-// Rekursif membaca seluruh isi Folder
 function traverseFileTree(item) {
   return new Promise((resolve) => {
     if (item.isFile) {
       item.file((file) => {
-        if (file && file.type && file.type.startsWith('image/')) {
-          resolve([file]);
-        } else {
-          resolve([]);
-        }
+        if (file && file.type && file.type.startsWith('image/')) resolve([file]);
+        else resolve([]);
       }, () => resolve([]));
     } else if (item.isDirectory) {
       const dirReader = item.createReader();
       let entries = [];
-
       const readAllEntries = () => {
         dirReader.readEntries(async (results) => {
           if (results.length === 0) {
@@ -139,7 +144,6 @@ function traverseFileTree(item) {
           }
         }, () => resolve([]));
       };
-
       readAllEntries();
     } else {
       resolve([]);
@@ -151,73 +155,87 @@ fileInput.addEventListener('change', (e) => {
   if (e.target.files?.length > 0) handleFiles(Array.from(e.target.files));
 });
 
-// --- HELPER METADATA WAKTU & PENGURUTAN (RENDAH KE TINGGI) ---
 function getFileTimestamp(file) {
   const name = file.name || "";
-  // Cek jika ada format DJI YYYYMMDDHHMMSS
   const matchDji = name.match(/DJI_(\d{14})/);
-  if (matchDji) {
-    return parseInt(matchDji[1], 10);
-  }
-  // Alternatif: Ambil timestamp dari properti lastModified file
+  if (matchDji) return parseInt(matchDji[1], 10);
   return file.lastModified || 0;
 }
 
 function sortByTimestamp(a, b) {
   const timeA = getFileTimestamp(a.file);
   const timeB = getFileTimestamp(b.file);
-  if (timeA !== timeB) {
-    return timeA - timeB;
-  }
+  if (timeA !== timeB) return timeA - timeB;
   return a.file.name.localeCompare(b.file.name);
 }
 
-// --- PENANGANAN FILE & PROSES BATCH ---
-function handleFiles(files) {
+// --- OPTIMASI SANGAT RINGAN: BATCH PROCESSING SECARA CHUNK ---
+async function handleFiles(files) {
   const validFiles = files.filter(f => f.type && f.type.startsWith('image/'));
   if (validFiles.length === 0) return;
 
-  let loadedCount = 0;
+  // Tampilkan indikator loading
+  if (uploadStatus) {
+    uploadStatus.classList.remove('hidden');
+    uploadStatusText.textContent = `Memuat 0/${validFiles.length} foto...`;
+    uploadProgressBar.style.width = `0%`;
+  }
+
   const newItems = [];
 
-  validFiles.forEach(file => {
+  for (let i = 0; i < validFiles.length; i++) {
+    const file = validFiles[i];
+    const objectUrl = URL.createObjectURL(file);
     const modDate = new Date(file.lastModified);
-    const dateStr = formatDate(modDate);
-    const timeStr = formatTime(modDate);
 
-    const reader = new FileReader();
-    reader.onload = (evt) => {
+    // Update status progress secara berkala
+    if (uploadStatusText && uploadProgressBar) {
+      const current = i + 1;
+      const percent = Math.round((current / validFiles.length) * 100);
+      uploadStatusText.textContent = `Memuat ${current}/${validFiles.length} foto...`;
+      uploadProgressBar.style.width = `${percent}%`;
+    }
+
+    // Muat gambar secara asynchronous
+    const item = await new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
-        const item = {
+        resolve({
           id: 'img_' + Math.random().toString(36).substr(2, 9),
           file: file,
           imgObj: img,
-          dateStr: dateStr,
-          timeStr: timeStr,
+          objectUrl: objectUrl,
+          dateStr: formatDate(modDate),
+          timeStr: formatTime(modDate),
           focalX: 0.5,
           focalY: 0.5
-        };
-        newItems.push(item);
-        loadedCount++;
-
-        if (loadedCount === validFiles.length) {
-          imageFiles.push(...newItems);
-          // Urutkan seluruh gambar dari waktu terendah ke tinggi
-          reorderAndRenderAll();
-        }
+        });
       };
-      img.src = evt.target.result;
-    };
-    reader.readAsDataURL(file);
-  });
+      img.onerror = () => resolve(null); // Penanganan jika gambar rusak
+      img.src = objectUrl;
+    });
+
+    if (item) newItems.push(item);
+
+    // Berikan jeda UI setiap 3 gambar agar browser tetap responsif & UI ter-update
+    if (i % 3 === 0) {
+      await new Promise(r => setTimeout(r, 10));
+    }
+  }
+
+  imageFiles.push(...newItems);
+  
+  // Sembunyikan kembali indikator loading setelah selesai
+  if (uploadStatus) {
+    uploadStatus.classList.add('hidden');
+  }
+
+  reorderAndRenderAll();
 }
 
-// Merapikan Urutan UI & Memuat Ulang Kartu Canvas Sesuai Urutan Waktu
 function reorderAndRenderAll() {
   imageFiles.sort(sortByTimestamp);
-  
-  // Terapkan posisi focal jika ada preset aktif
+
   const activePresetName = presetSelect.value;
   if (activePresetName) {
     const presets = getSavedPresets();
@@ -227,12 +245,16 @@ function reorderAndRenderAll() {
   }
 
   imageListContainer.innerHTML = '';
+  
+  // Buat DOM Element
   imageFiles.forEach(item => {
     createCardElement(item);
-    renderCanvas(item);
   });
 
   updateUIState();
+  
+  // Render Canvas bertahap
+  requestRenderAll();
 }
 
 function formatDate(date) {
@@ -267,7 +289,7 @@ function createCardElement(item) {
         <div>
           <span class="text-xs font-bold text-gray-200">${item.file.name}</span>
           <span class="text-[10px] text-gray-400 block">
-            Resolusi Asli: ${item.imgObj.naturalWidth} x ${item.imgObj.naturalHeight} px | Waktu: ${item.dateStr} ${item.timeStr}
+            ${item.imgObj.naturalWidth} x ${item.imgObj.naturalHeight} px | ${item.dateStr} ${item.timeStr}
           </span>
         </div>
         <button onclick="removeImage('${item.id}')" class="text-xs text-red-400 hover:text-red-300 font-semibold flex items-center gap-1">
@@ -281,18 +303,15 @@ function createCardElement(item) {
         <div id="focalPoint_${item.id}" class="absolute w-6 h-6 border-2 border-yellow-400 rounded-full -translate-x-1/2 -translate-y-1/2 pointer-events-none flex items-center justify-center shadow-md">
           <div class="w-1.5 h-1.5 bg-yellow-400 rounded-full"></div>
         </div>
-        <div class="absolute bottom-2 left-2 bg-black/60 backdrop-blur-sm text-[10px] text-white px-2 py-0.5 rounded opacity-0 group-hover:opacity-100 transition">
-          Klik pada foto untuk atur titik fokus (16:9)
-        </div>
       </div>
     </div>
 
     <div id="origCol_${item.id}" class="w-full md:w-64 flex-shrink-0 ${chkShowOriginal.checked ? '' : 'hidden'}">
       <div class="flex justify-between items-center mb-2">
-        <span class="text-xs font-semibold text-amber-400">Original (Tanpa Edit)</span>
+        <span class="text-xs font-semibold text-amber-400">Original</span>
       </div>
       <div class="rounded-lg overflow-hidden border border-gray-700 bg-gray-900">
-        <img src="${item.imgObj.src}" class="w-full h-auto block opacity-80">
+        <img src="${item.objectUrl}" class="w-full h-auto block opacity-80" loading="lazy">
       </div>
     </div>
   `;
@@ -309,6 +328,8 @@ function createCardElement(item) {
 }
 
 function removeImage(id) {
+  const item = imageFiles.find(i => i.id === id);
+  if (item && item.objectUrl) URL.revokeObjectURL(item.objectUrl);
   imageFiles = imageFiles.filter(i => i.id !== id);
   document.getElementById(`card_${id}`)?.remove();
   updateUIState();
@@ -325,11 +346,11 @@ function renderAllCanvases() {
   });
 }
 
-// --- CANVAS RENDERING (RESOLUSI ASLI) ---
+// --- RENDERING DENGAN RESOLUSI RENDAH KHUSUS UI PREVIEW ---
 function renderCanvas(item) {
   const canvas = document.getElementById(`canvas_${item.id}`);
   if (!canvas) return;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { alpha: false });
 
   const img = item.imgObj;
   const srcW = img.naturalWidth;
@@ -352,8 +373,13 @@ function renderCanvas(item) {
   cropX = Math.max(0, Math.min(srcW - cropW, cropX));
   cropY = Math.max(0, Math.min(srcH - cropH, cropY));
 
-  canvas.width = Math.round(cropW);
-  canvas.height = Math.round(cropH);
+  // BATASI UKURAN RENDER UI PREVIEW MAKSIMAL LEBAR 800PX SAJA
+  // Ini kunci utama agar preview 30 foto tetap cepat & super lancar!
+  const maxUIWidth = 800;
+  const scale = cropW > maxUIWidth ? maxUIWidth / cropW : 1;
+
+  canvas.width = Math.round(cropW * scale);
+  canvas.height = Math.round(cropH * scale);
 
   ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, canvas.width, canvas.height);
   drawWatermark(ctx, canvas.width, canvas.height, item);
@@ -424,7 +450,6 @@ function drawWatermark(ctx, canvasW, canvasH, item) {
       break;
   }
 
-  // Shadow
   if (chkApplyShadow.checked) {
     ctx.save();
     const sColor = shadowColor.value;
@@ -438,7 +463,6 @@ function drawWatermark(ctx, canvasW, canvasH, item) {
     ctx.restore();
   }
 
-  // Outline
   const outlineRadio = document.querySelector('input[name="outlineMode"]:checked');
   const outlineMode = outlineRadio ? outlineRadio.value : 'both';
   if (chkApplyOutline.checked) {
@@ -448,7 +472,6 @@ function drawWatermark(ctx, canvasW, canvasH, item) {
     ctx.strokeText(text, posX, posY);
   }
 
-  // Text Fill
   if (outlineMode !== 'outlineOnly') {
     ctx.fillStyle = hexToRgba(textColor.value, parseFloat(textOpacity.value) / 100);
     ctx.fillText(text, posX, posY);
@@ -464,8 +487,7 @@ function hexToRgba(hex, alpha) {
   return `rgba(${(num >> 16) & 255}, ${(num >> 8) & 255}, ${num & 255}, ${alpha})`;
 }
 
-// --- FITUR MANAJEMEN PRESET LENGKAP ---
-
+// --- MANAJEMEN PRESET ---
 function getSavedPresets() {
   try {
     const json = localStorage.getItem(PRESET_STORAGE_KEY);
@@ -480,8 +502,8 @@ function saveSavedPresets(presetsObj) {
 function refreshPresetDropdown(selectedName = null) {
   const presets = getSavedPresets();
   presetSelect.innerHTML = '';
-
   const keys = Object.keys(presets);
+
   if (keys.length === 0) {
     const opt = document.createElement('option');
     opt.value = "";
@@ -535,14 +557,12 @@ function getCurrentPresetData(name) {
   };
 }
 
-// 1. TAMBAH PRESET BARU
 btnAddPreset.addEventListener('click', () => {
   const presetName = prompt('Masukkan Nama Preset Baru:', 'Preset Utama');
   if (!presetName || !presetName.trim()) return;
 
   const cleanName = presetName.trim();
   const presets = getSavedPresets();
-
   presets[cleanName] = getCurrentPresetData(cleanName);
 
   saveSavedPresets(presets);
@@ -550,7 +570,6 @@ btnAddPreset.addEventListener('click', () => {
   alert(`Preset "${cleanName}" berhasil ditambahkan!`);
 });
 
-// 2. EDIT / UPDATE PRESET
 btnEditPreset.addEventListener('click', () => {
   const selectedName = presetSelect.value;
   if (!selectedName) {
@@ -558,7 +577,7 @@ btnEditPreset.addEventListener('click', () => {
     return;
   }
 
-  if (confirm(`Apakah Anda yakin ingin memperbarui isi preset "${selectedName}" dengan pengaturan saat ini?`)) {
+  if (confirm(`Apakah Anda yakin ingin memperbarui isi preset "${selectedName}"?`)) {
     const presets = getSavedPresets();
     presets[selectedName] = getCurrentPresetData(selectedName);
 
@@ -568,7 +587,6 @@ btnEditPreset.addEventListener('click', () => {
   }
 });
 
-// 3. MUAT PRESET TERPILIH
 btnLoadPreset.addEventListener('click', () => {
   const selectedName = presetSelect.value;
   if (!selectedName) return;
@@ -622,12 +640,10 @@ function applyPresetData(p) {
   offsetY.value = p.offsetY ?? offsetY.value;
 
   applyFocalPositions(p.focalPositions);
-
   updateLabels();
-  renderAllCanvases();
+  requestRenderAll();
 }
 
-// 4. DOWNLOAD PRESET (.JSON)
 btnDownloadPreset.addEventListener('click', () => {
   const selectedName = presetSelect.value;
   const presets = getSavedPresets();
@@ -640,11 +656,9 @@ btnDownloadPreset.addEventListener('click', () => {
   const presetData = presets[selectedName];
   const jsonStr = JSON.stringify(presetData, null, 2);
   const blob = new Blob([jsonStr], { type: "application/json" });
-  
   saveAs(blob, `Preset_${selectedName.replace(/\s+/g, '_')}.json`);
 });
 
-// 5. UPLOAD PRESET (.JSON)
 presetFileInput.addEventListener('change', (e) => {
   const file = e.target.files?.[0];
   if (!file) return;
@@ -653,7 +667,6 @@ presetFileInput.addEventListener('change', (e) => {
   reader.onload = (evt) => {
     try {
       const importedPreset = JSON.parse(evt.target.result);
-
       if (!importedPreset.name || !importedPreset.txtTemplate) {
         alert('Format file JSON preset tidak valid!');
         return;
@@ -663,7 +676,7 @@ presetFileInput.addEventListener('change', (e) => {
       let presetName = importedPreset.name;
 
       if (presets[presetName]) {
-        const rename = prompt(`Preset dengan nama "${presetName}" sudah ada. Masukkan nama baru jika tidak ingin menimpa:`, `${presetName}_Impor`);
+        const rename = prompt(`Preset "${presetName}" sudah ada. Masukkan nama baru:`, `${presetName}_Impor`);
         if (rename && rename.trim()) presetName = rename.trim();
       }
 
@@ -674,16 +687,15 @@ presetFileInput.addEventListener('change', (e) => {
       refreshPresetDropdown(presetName);
       applyPresetData(importedPreset);
 
-      alert(`Preset "${presetName}" berhasil diunggah dan diterapkan!`);
+      alert(`Preset "${presetName}" berhasil diunggah!`);
     } catch (err) {
-      alert('Gagal membaca file preset JSON. Pastikan filenya valid.');
+      alert('Gagal membaca file preset JSON.');
     }
   };
   reader.readAsText(file);
   presetFileInput.value = '';
 });
 
-// 6. HAPUS PRESET
 btnDeletePreset.addEventListener('click', () => {
   const selectedName = presetSelect.value;
   if (!selectedName) return;
@@ -696,37 +708,67 @@ btnDeletePreset.addEventListener('click', () => {
   }
 });
 
-// --- PROSES DOWNLOAD ZIP ---
+// --- DOWNLOAD ZIP FULL RESOLUTION TANPA MEMBEBANI BROWSER ---
 btnDownloadZip.addEventListener('click', async () => {
   if (imageFiles.length === 0) return;
 
   btnDownloadZip.disabled = true;
-  btnDownloadZip.textContent = "Memproses ZIP...";
 
   const zip = new JSZip();
   const includeOriginals = chkIncludeOriginalsZip.checked;
+  const originalsFolder = includeOriginals ? zip.folder("Originals") : null;
 
-  let originalsFolder = null;
-  if (includeOriginals) {
-    originalsFolder = zip.folder("Originals");
-  }
+  const exportCanvas = document.createElement('canvas');
+  const exportCtx = exportCanvas.getContext('2d');
 
   for (let i = 0; i < imageFiles.length; i++) {
-    const item = imageFiles[i];
-    const canvas = document.getElementById(`canvas_${item.id}`);
+    btnDownloadZip.textContent = `Memproses (${i + 1}/${imageFiles.length})...`;
 
-    const blob16x9 = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.95));
+    const item = imageFiles[i];
+    const img = item.imgObj;
+    const srcW = img.naturalWidth;
+    const srcH = img.naturalHeight;
+
+    const targetRatio = 16 / 9;
+    let cropW, cropH;
+
+    if (srcW / srcH > targetRatio) {
+      cropH = srcH;
+      cropW = srcH * targetRatio;
+    } else {
+      cropW = srcW;
+      cropH = srcW / targetRatio;
+    }
+
+    let cropX = (srcW * item.focalX) - (cropW / 2);
+    let cropY = (srcH * item.focalY) - (cropH / 2);
+
+    cropX = Math.max(0, Math.min(srcW - cropW, cropX));
+    cropY = Math.max(0, Math.min(srcH - cropH, cropY));
+
+    // Render kualitias penuh hanya saat diproses ke ZIP
+    exportCanvas.width = Math.round(cropW);
+    exportCanvas.height = Math.round(cropH);
+
+    exportCtx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, exportCanvas.width, exportCanvas.height);
+    drawWatermark(exportCtx, exportCanvas.width, exportCanvas.height, item);
+
+    const blob16x9 = await new Promise(resolve => exportCanvas.toBlob(resolve, 'image/jpeg', 0.92));
     const cleanName = item.file.name.substring(0, item.file.name.lastIndexOf('.')) || item.file.name;
-    
-    // Penamaan file urut sesuai indeks kronologis
     const indexPrefix = String(i + 1).padStart(2, '0');
+
     zip.file(`${indexPrefix}_${cleanName}_16x9.jpg`, blob16x9);
 
     if (includeOriginals && originalsFolder) {
       originalsFolder.file(`${indexPrefix}_${item.file.name}`, item.file);
     }
+
+    // Jeda kecil agar UI tetap responsif
+    await new Promise(r => setTimeout(r, 15));
   }
 
+  btnDownloadZip.textContent = "Kompresi ZIP...";
+  
   zip.generateAsync({ type: "blob" }).then(content => {
     saveAs(content, "Hasil_Crop_16x9_Urut.zip");
     btnDownloadZip.disabled = false;
